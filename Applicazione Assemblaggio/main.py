@@ -8,39 +8,153 @@ from kivy.uix.checkbox import CheckBox
 from kivy.uix.popup import Popup
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.floatlayout import FloatLayout
 
 import csv
 import re
 from datetime import datetime
 
+# Funzione per calcolo della media di tempo impiegato dagli operatori
+def calcola_e_salva_media(codice_operatore):
+    start_records = []
+    stop_records = []
+    
+    # Leggi record START
+    try:
+        with open("record_start.csv", "r") as file:
+            reader = csv.reader(file, delimiter='|')
+            for row in reader:
+                if len(row) >= 6 and row[0].strip() == codice_operatore:
+                    start_records.append({
+                        'ordine': row[1].strip(),
+                        'data': row[3].strip(),
+                        'ora': row[4].strip(),
+                        'nome': row[5].strip(),
+                        'datetime': datetime.strptime(f"{row[3].strip()} {row[4].strip()}", "%d/%m/%Y %H:%M:%S")
+                    })
+    except FileNotFoundError:
+        return
+    
+    # Leggi record STOP
+    try:
+        with open("record_stop.csv", "r") as file:
+            reader = csv.reader(file, delimiter='|')
+            for row in reader:
+                if len(row) >= 6 and row[0].strip() == codice_operatore:
+                    stop_records.append({
+                        'ordine': row[1].strip(),
+                        'data': row[3].strip(),
+                        'ora': row[4].strip(),
+                        'nome': row[5].strip(),
+                        'datetime': datetime.strptime(f"{row[3].strip()} {row[4].strip()}", "%d/%m/%Y %H:%M:%S")
+                    })
+    except FileNotFoundError:
+        return
+    
+    if not start_records or not stop_records:
+        return
+    
+    # Ordina i record per data/ora
+    start_records.sort(key=lambda x: x['datetime'])
+    stop_records.sort(key=lambda x: x['datetime'])
+    
+    # Abbina START con STOP cronologicamente
+    tempi_lavorazione = []
+    stop_usati = set()
+    
+    for start in start_records:
+        # Trova il primo STOP dopo questo START con stesso ordine
+        for i, stop in enumerate(stop_records):
+            if (i not in stop_usati and 
+                stop['ordine'] == start['ordine'] and 
+                stop['datetime'] >= start['datetime']):
+                
+                # Calcola durata
+                durata_secondi = (stop['datetime'] - start['datetime']).total_seconds()
+                
+                if durata_secondi > 0:
+                    tempi_lavorazione.append(durata_secondi)
+                    stop_usati.add(i)
+                    print(f"START: {start['datetime']} → STOP: {stop['datetime']} = {durata_secondi} secondi")
+                break
+    
+    if not tempi_lavorazione:
+        print(f"Nessuna lavorazione completa trovata per operatore {codice_operatore}")
+        return
+    
+    # Calcola media
+    media_secondi = sum(tempi_lavorazione) / len(tempi_lavorazione)
+    nome_operatore = start_records[0]['nome'] if start_records else ""
+    
+    print(f"Tempi individuali: {tempi_lavorazione}")
+    print(f"Media calcolata: {media_secondi} secondi")
+    
+    # Leggi medie esistenti
+    medie_esistenti = {}
+    try:
+        with open("medie.csv", "r") as file:
+            reader = csv.reader(file, delimiter='|')
+            for row in reader:
+                if len(row) >= 3:
+                    medie_esistenti[row[0].strip()] = (row[1].strip(), row[2].strip())
+                elif len(row) >= 2:
+                    medie_esistenti[row[0].strip()] = ("", row[1].strip())
+    except FileNotFoundError:
+        pass
+    
+    # Aggiorna media
+    medie_esistenti[codice_operatore] = (nome_operatore, str(round(media_secondi, 3)))
+    
+    # Salva file con formato: operatore|nome|media_secondi
+    with open("medie.csv", "w", newline="") as file:
+        writer = csv.writer(file, delimiter='|')
+        for operatore, (nome, media) in medie_esistenti.items():
+            writer.writerow([operatore, nome, media])
+    
+    print(f"Media salvata per {codice_operatore} ({nome_operatore}): {round(media_secondi, 3)} secondi")
+
+
+
 # Schermata Principale
 class MainScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        layout = BoxLayout(orientation="vertical", padding=dp(20), spacing=dp(15))
 
-        title = Label(text="STAMPOPLAST", size_hint=(None, None), size=(600, 100), pos_hint={"center_x": 0.5, "top": 0.98}, color=(1, 0, 0, 1), font_size=80, bold=True)
+        # Layout principale con FloatLayout per positioning assoluto
+        main_layout = FloatLayout()
 
-        assemb_lb = Label(text="Reparto Assemblaggio", size_hint=(None, None), size=(500, 60), pos_hint={"center_x": 0.5, "top": 0.83}, font_size=40)
-        reg_lb = Label(text="Registro Lavorazioni", size_hint=(None, None), size=(500, 60), pos_hint={"center_x": 0.5, "top": 0.77}, font_size=40)
+        # Titolo principale
+        title = Label( text="STAMPOPLAST", size_hint=(None, None), size=(dp(400), dp(80)), pos_hint={"center_x": 0.5, "top": 0.95}, color=(1, 0, 0, 1), font_size=dp(100), bold=True )
 
-        start_btn = Button(text="START", size_hint=(None, None), size=(200, 100), pos_hint={"center_x": 0.4, "center_y": 0.35}, background_color=(0, 1, 0, 1), font_size=30, bold=True)
-        stop_btn = Button(text="STOP", size_hint=(None, None), size=(200, 100), pos_hint={"center_x": 0.6, "center_y": 0.35}, background_color=(1, 0, 0, 1), font_size=30, bold=True)
-        exit_btn = Button(text="EXIT", size_hint=(None, None), size=(200, 100), pos_hint={"right": 0.97, "top": 0.95}, background_color=(0, 1, 1, 1), font_size=30, bold=True)
+        # Box per le etichette 
+        labels_box = BoxLayout( orientation="vertical", spacing=dp(10), size_hint=(None, None), size=(dp(400), dp(200)), pos_hint={"center_x": 0.5, "center_y": 0.7})
+        assemb_lb = Label( text="Reparto Assemblaggio", size_hint=(1, 0.5), font_size=dp(40))
+        reg_lb = Label( text="Registro Lavorazioni", size_hint=(1, 0.5), font_size=dp(40))
+        
+        labels_box.add_widget(assemb_lb)
+        labels_box.add_widget(reg_lb)
+
+        # box per i pulsanti START/STOP 
+        buttons_box = BoxLayout( orientation="horizontal", spacing=dp(200), size_hint=(None, None), size=(dp(650), dp(100)), pos_hint={"center_x": 0.5, "center_y": 0.4})
+        start_btn = Button( text="START", size_hint=(0.5, 1), background_color=(0, 1, 0, 1), font_size=dp(30), bold=True) 
+        stop_btn = Button( text="STOP", size_hint=(0.5, 1), background_color=(1, 0, 0, 1), font_size=dp(30), bold=True)
+        
+        exit_btn = Button( text="EXIT", size_hint=(None, None), size=(dp(200), dp(80)), pos_hint={"right": 0.95, "y": 0.05}, background_color=(0, 1, 1, 1), font_size=dp(25), bold=True)
+
+        buttons_box.add_widget(start_btn)
+        buttons_box.add_widget(stop_btn)
 
         start_btn.bind(on_press=self.start)
         stop_btn.bind(on_press=self.stop)
         exit_btn.bind(on_press=self.exit_app)
 
-        layout.add_widget(title)
-        layout.add_widget(assemb_lb)
-        layout.add_widget(reg_lb)
-        layout.add_widget(start_btn)
-        layout.add_widget(stop_btn)
-        layout.add_widget(exit_btn)
+        # Aggiunta widget al layout principale
+        main_layout.add_widget(title)
+        main_layout.add_widget(labels_box)
+        main_layout.add_widget(buttons_box)
+        main_layout.add_widget(exit_btn)
 
-        self.add_widget(layout)
+        self.add_widget(main_layout)
 
     def start(self, instance):
         self.manager.current = "start_screen"
@@ -56,52 +170,73 @@ class StartScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        main_layout = AnchorLayout(anchor_x="center", anchor_y="bottom")
+        main_layout = FloatLayout()
 
-        layout = BoxLayout(orientation="vertical", spacing=dp(55), size_hint=(1, None), height=dp(400), padding=dp(170))
-        title = Label(text="Registro di eventi START", size_hint=(1, None), height=dp(80), font_size=70, bold=True, color=(1, 0, 0, 1))
+        # Titolo centrato in alto
+        title = Label( text="Registro di eventi START", size_hint=(None, None), size=(dp(500), dp(80)), pos_hint={"center_x": 0.5, "top": 0.95}, font_size=dp(80), bold=True, color=(1, 0, 0, 1))
 
-        op_box = BoxLayout(orientation="vertical", size_hint=(None, None), width=dp(320), height=dp(100), spacing=dp(5), pos_hint={"center_x": 0.5})
-        op_lbl = Label(text="Numero Operatore", size_hint=(1, None), height=dp(40), font_size=dp(40))
-        self.numOp_in = TextInput(size_hint=(1, None), height=dp(50), font_size=dp(18))
+        # box principale per i campi input
+        form_box = BoxLayout( orientation="vertical", spacing=dp(20), size_hint=(None, None), size=(dp(400), dp(400)), pos_hint={"center_x": 0.5, "center_y": 0.5})
+
+        # Campo Operatore
+        op_box = BoxLayout(orientation="vertical", spacing=dp(20), size_hint=(1, None), height=dp(95))
+        op_lbl = Label(text="Numero Operatore", size_hint=(1, 0.4), font_size=dp(40))
+        self.numOp_in = TextInput(size_hint=(1, 0.6), font_size=dp(25))
         op_box.add_widget(op_lbl)
         op_box.add_widget(self.numOp_in)
         
-        ord_box = BoxLayout(orientation="vertical", size_hint=(None, None), width=dp(320), height=dp(100), spacing=dp(5), pos_hint={"center_x": 0.5})
-        ord_lbl = Label(text="Numero ordine di produzione", size_hint=(1, None), height=dp(40), font_size=dp(40))
-        self.numOrd_in = TextInput(size_hint=(1, None), height=dp(50), font_size=dp(18))
+        # Campo Ordine
+        ord_box = BoxLayout(orientation="vertical", spacing=dp(20), size_hint=(1, None), height=dp(95))
+        ord_lbl = Label(text="Numero ordine di produzione", size_hint=(1, 0.4), font_size=dp(40))
+        self.numOrd_in = TextInput(size_hint=(1, 0.6), font_size=dp(25))
         ord_box.add_widget(ord_lbl)
         ord_box.add_widget(self.numOrd_in)
 
-        laser_si_box = BoxLayout(orientation="horizontal", size_hint=(None, None), width=dp(320), height=dp(20), spacing=dp(5), pos_hint={"center_x": 0.5})
-        laser_no_box = BoxLayout(orientation="horizontal", size_hint=(None, None), width=dp(320), height=dp(20), spacing=dp(5), pos_hint={"center_x": 0.5})
-        laser_lbl = Label(text="L'ordine è di laseratura:", size_hint=(1, None), height=dp(40), font_size=dp(40), halign="center", valign="middle")
-        self.laser_si = CheckBox(group="laser", size_hint=(1, None), height=dp(20))
-        self.laser_no = CheckBox(group="laser", size_hint=(1, None), height=dp(20))
-        laser_si_lbl = Label(text="SI", size_hint=(1, None), height=dp(20), font_size=dp(30))
-        laser_no_lbl = Label(text="NO", size_hint=(1, None), height=dp(20), font_size=dp(30))
+        # Sezione Laser
+        laser_section = BoxLayout(orientation="vertical", spacing=dp(10), size_hint=(1, None), height=dp(100))        
+        laser_lbl = Label( text="L'ordine è di laseratura:", size_hint=(1, 0.4), font_size=dp(33), halign="center", valign="middle")
+        
+        laser_options = BoxLayout(orientation="horizontal", spacing=dp(30), size_hint=(1, 0.6))
+        
+        laser_si_box = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint=(0.5, 1))
+        self.laser_si = CheckBox(group="laser", size_hint=(0.3, 1))
+        laser_si_lbl = Label(text="SI", size_hint=(0.7, 1), font_size=dp(27))
         laser_si_box.add_widget(self.laser_si)
         laser_si_box.add_widget(laser_si_lbl)
+        
+        laser_no_box = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint=(0.5, 1))
+        self.laser_no = CheckBox(group="laser", size_hint=(0.3, 1))
+        laser_no_lbl = Label(text="NO", size_hint=(0.7, 1), font_size=dp(27))
         laser_no_box.add_widget(self.laser_no)
         laser_no_box.add_widget(laser_no_lbl)
+        
+        laser_options.add_widget(laser_si_box)
+        laser_options.add_widget(laser_no_box)
+        
+        laser_section.add_widget(laser_lbl)
+        laser_section.add_widget(laser_options)
 
-        save_btn = Button(text="SALVA", size_hint=(None, None), width=dp(200), height=dp(100), background_color=(0, 1, 0, 1), font_size=dp(30),pos_hint={"center_x": 0.5}, bold=True)
+        # Pulsante SALVA centrato
+        save_btn = Button( text="SALVA", size_hint=(None, None), size=(dp(200), dp(80)), background_color=(0, 1, 0, 1), font_size=dp(25), bold=True)
 
-        home_btn = Button(text="HOME", size_hint=(None, None), width=dp(200), height=dp(100), background_color=(1, 1, 0, 1), font_size=dp(30), pos_hint={"right": 1, "top": 1}, bold=True
-        )
+        # Aggiunta elementi al form box
+        form_box.add_widget(op_box)
+        form_box.add_widget(ord_box)
+        form_box.add_widget(laser_section)
+        form_box.add_widget(save_btn)
+
+        # Pulsante HOME in basso a destra con margine
+        home_btn = Button( text="HOME", size_hint=(None, None), size=(dp(200), dp(80)), pos_hint={"right": 0.95, "y": 0.05}, background_color=(1, 1, 0, 1), font_size=dp(25), bold=True)
+
+        # Binding eventi
         home_btn.bind(on_press=self.home)
         save_btn.bind(on_press=self.salva_start)
 
-        layout.add_widget(title)
-        layout.add_widget(op_box)
-        layout.add_widget(ord_box)
-        layout.add_widget(laser_lbl)
-        layout.add_widget(laser_si_box)
-        layout.add_widget(laser_no_box)
-        layout.add_widget(save_btn)
-        layout.add_widget(home_btn)
+        # Aggiunta widget al layout principale
+        main_layout.add_widget(title)
+        main_layout.add_widget(form_box)
+        main_layout.add_widget(home_btn)
 
-        main_layout.add_widget(layout)
         self.add_widget(main_layout)
 
     def salva_start(self, instance):
@@ -138,11 +273,13 @@ class StartScreen(Screen):
                         nome_operatore = ope[1].strip()
                         break
 
-        print(f"[START] Operatore: {val_op}, Ordine: {val_ord}, Laser: {laser}, Start Time: {start_time}, Nome Operatore: {nome_operatore}")
+        print(f"[START] Operatore: {val_op}, Ordine: {val_ord}, Laser: {laser}, oggi: {oggi}, Start Time: {start_time}, Nome Operatore: {nome_operatore}")
         
         with open("record_start.csv", "a", newline="") as file:
             writer = csv.writer(file, delimiter='|')
             writer.writerow([val_op, val_ord, laser, oggi, start_time, nome_operatore])
+
+        calcola_e_salva_media(val_op)
 
         # Svuotiamo i campi della sezione start
         self.numOp_in.text = ""
@@ -153,10 +290,8 @@ class StartScreen(Screen):
         popup = Popup(title="CONFERMA", content=Label(text="Dati salvati correttamente."), size_hint=(None, None), pos_hint={"center_x":0.5, "center_y":0.5}, size=(300,200))
         popup.bind(on_dismiss=self.home)
         popup.open()
+
         
-        # Svuotiamo i campi start
-
-
     def home(self, instance):
         self.manager.current = "main"
 
@@ -164,58 +299,77 @@ class StartScreen(Screen):
 class StopScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        main_layout = AnchorLayout(anchor_x="center", anchor_y="bottom")
+        
+        main_layout = FloatLayout()
 
-        layout = BoxLayout(orientation="vertical", spacing=dp(55), size_hint=(1, None), height=dp(400), padding=dp(20))
-        title = Label(text="Registro di eventi START", size_hint=(1, None), height=dp(80), font_size=70, bold=True, color=(1, 0, 0, 1))
+        # Titolo centrato in alto
+        title = Label( text="Registro di eventi STOP", size_hint=(None, None), size=(dp(500), dp(80)), pos_hint={"center_x": 0.5, "top": 0.95}, font_size=dp(80), bold=True, color=(1, 0, 0, 1))
 
-        op_box = BoxLayout(orientation="vertical", size_hint=(None, None), width=dp(320), height=dp(100), spacing=dp(5), pos_hint={"center_x": 0.5})
-        op_lbl = Label(text="Numero Operatore", size_hint=(1, None), height=dp(40), font_size=dp(40))
-        self.numOp_in = TextInput(size_hint=(1, None), height=dp(50), font_size=dp(18))
+        # box principale per i campi input
+        form_box = BoxLayout( orientation="vertical", spacing=dp(20), size_hint=(None, None), size=(dp(400), dp(450)), pos_hint={"center_x": 0.5, "center_y": 0.43})
+
+        # Campo Operatore
+        op_box = BoxLayout(orientation="vertical", spacing=dp(20), size_hint=(1, None), height=dp(95))
+        op_lbl = Label(text="Numero Operatore", size_hint=(1, 0.4), font_size=dp(40))
+        self.numOp_in = TextInput(size_hint=(1, 0.6), font_size=dp(25))
         op_box.add_widget(op_lbl)
         op_box.add_widget(self.numOp_in)
         
-        ord_box = BoxLayout(orientation="vertical", size_hint=(None, None), width=dp(320), height=dp(100), spacing=dp(5), pos_hint={"center_x": 0.5})
-        ord_lbl = Label(text="Numero ordine di produzione", size_hint=(1, None), height=dp(40), font_size=dp(40))
-        self.numOrd_in = TextInput(size_hint=(1, None), height=dp(50), font_size=dp(18))
+        # Campo Ordine
+        ord_box = BoxLayout(orientation="vertical", spacing=dp(20), size_hint=(1, None), height=dp(95))
+        ord_lbl = Label(text="Numero ordine di produzione", size_hint=(1, 0.4), font_size=dp(40))
+        self.numOrd_in = TextInput(size_hint=(1, 0.6), font_size=dp(25))
         ord_box.add_widget(ord_lbl)
         ord_box.add_widget(self.numOrd_in)
 
-        prd_box = BoxLayout(orientation="vertical", size_hint=(None, None), width=dp(320), height=dp(100), spacing=dp(5), pos_hint={"center_x": 0.5})
-        prd_lbl = Label(text="Pezzi Prodotti", pos_hint={"center_x": 0.5, "center_y": 0.59}, font_size=40)
-        self.numPrd_in = TextInput(size_hint=(None, None), size=(320, 50), pos_hint={"center_x": 0.5, "center_y": 0.54}, font_size=20)
+        # Campo Pezzi Prodotti
+        prd_box = BoxLayout(orientation="vertical", spacing=dp(5), size_hint=(1, None), height=dp(80))
+        prd_lbl = Label(text="Pezzi Prodotti", size_hint=(1, 0.4), font_size=dp(35))
+        self.numPrd_in = TextInput(size_hint=(1, 0.6), font_size=dp(25))
         prd_box.add_widget(prd_lbl)
         prd_box.add_widget(self.numPrd_in)
 
-        laser_si_box = BoxLayout(orientation="horizontal", size_hint=(None, None), width=dp(320), height=dp(20), spacing=dp(5), pos_hint={"center_x": 0.5})
-        laser_no_box = BoxLayout(orientation="horizontal", size_hint=(None, None), width=dp(320), height=dp(20), spacing=dp(5), pos_hint={"center_x": 0.5})
-        laser_lbl = Label(text="L'ordine è di laseratura:", size_hint=(1, None), height=dp(40), font_size=dp(40), halign="center", valign="middle")
-        self.laser_si = CheckBox(group="laser", size_hint=(1, None), height=dp(20))
-        self.laser_no = CheckBox(group="laser", size_hint=(1, None), height=dp(20))
-        laser_si_lbl = Label(text="SI", size_hint=(1, None), height=dp(20), font_size=dp(30))
-        laser_no_lbl = Label(text="NO", size_hint=(1, None), height=dp(20), font_size=dp(30))
+        # Sezione Laser
+        laser_section = BoxLayout(orientation="vertical", spacing=dp(10), size_hint=(1, None), height=dp(100))        
+        laser_lbl = Label( text="L'ordine è di laseratura:", size_hint=(1, 0.4), font_size=dp(33), halign="center", valign="middle")
+        
+        laser_options = BoxLayout(orientation="horizontal", spacing=dp(30), size_hint=(1, 0.6))
+        
+        laser_si_box = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint=(0.5, 1))
+        self.laser_si = CheckBox(group="laser", size_hint=(0.3, 1))
+        laser_si_lbl = Label(text="SI", size_hint=(0.7, 1), font_size=dp(27))
         laser_si_box.add_widget(self.laser_si)
         laser_si_box.add_widget(laser_si_lbl)
+        
+        laser_no_box = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint=(0.5, 1))
+        self.laser_no = CheckBox(group="laser", size_hint=(0.3, 1))
+        laser_no_lbl = Label(text="NO", size_hint=(0.7, 1), font_size=dp(27))
         laser_no_box.add_widget(self.laser_no)
         laser_no_box.add_widget(laser_no_lbl)
+        
+        laser_options.add_widget(laser_si_box)
+        laser_options.add_widget(laser_no_box)
+        
+        laser_section.add_widget(laser_lbl)
+        laser_section.add_widget(laser_options)
 
-        save_btn = Button(text="SALVA", pos_hint={"center_x": 0.5, "center_y": 0.25}, size_hint=(None, None), size=(200, 100), background_color=(0, 1, 0, 1), font_size=30, bold=True)
-        home_btn = Button(text="HOME", pos_hint={"right": 0.97, "center_y": 0.905}, size_hint=(None, None), size=(200, 100), background_color=(1, 1, 0, 1), font_size=30, bold=True)
+        save_btn = Button( text="SALVA", size_hint=(None, None), size=(dp(200), dp(80)), background_color=(0, 1, 0, 1), font_size=dp(25), bold=True)
+        home_btn = Button( text="HOME", size_hint=(None, None), size=(dp(200), dp(80)), pos_hint={"right": 0.95, "y": 0.05}, background_color=(1, 1, 0, 1), font_size=dp(25), bold=True)
 
+        # Aggiunta elementi al form box
         home_btn.bind(on_press=self.home)
         save_btn.bind(on_press=self.salva_stop)
 
-        layout.add_widget(title)
-        layout.add_widget(op_box)
-        layout.add_widget(ord_box)
-        layout.add_widget(prd_box)
-        layout.add_widget(laser_lbl)
-        layout.add_widget(laser_si_box)
-        layout.add_widget(laser_no_box)
-        layout.add_widget(save_btn)
-        layout.add_widget(home_btn)
+        form_box.add_widget(op_box)
+        form_box.add_widget(ord_box)
+        form_box.add_widget(prd_box)
+        form_box.add_widget(laser_section)
+        form_box.add_widget(save_btn)
+
+        main_layout.add_widget(title)
+        main_layout.add_widget(form_box)
+        main_layout.add_widget(home_btn)
         
-        main_layout.add_widget(layout)
         self.add_widget(main_layout)
 
     def salva_stop(self, instance):
@@ -243,27 +397,38 @@ class StopScreen(Screen):
         elif not regex_pezzi.match(val_prd):
             Popup(title="ERRORE", content=Label(text="Il valore pezzi non è valido."), size_hint=(None, None), pos_hint={"center_x":0.5, "center_y":0.5}, size=(300,200)).open()
             return
-
         laser = "SI" if self.laser_si.active else "NO"
-        print(f"[STOP] Operatore: {val_op}, Ordine: {val_ord}, Laser: {laser}, Pezzi: {val_prd}, Stop Time: {stop_time}")
 
-        # Ricaviamo il nome dell'operatore
+        # Ricerca del nome dell'operatore all'interno di operatori.csv
         nome_operatore = ""
         valore_operatore_find = val_op
-        if laser == "laser_si":
-            valore_operatore_find = val_op[:-1]      
+        if laser == "SI":
+            valore_operatore_find = val_op     
             with open("operatori.csv", "r") as file_ope:
                 reader_ope = csv.reader(file_ope, delimiter='|')
                 for ope in reader_ope:
-                    if ope[0] == valore_operatore_find:
-                        nome_operatore = ope[1]
+                    if ope[0].strip() == valore_operatore_find.strip():
+                        nome_operatore = ope[1].strip()
                         break
 
+        print(f"[STOP] Operatore: {val_op}, Ordine: {val_ord}, Laser: {laser}, Pezzi Prodotti: {val_prd}, Data: {oggi},Stop Time: {stop_time}, Nome Operatore: {nome_operatore}")
+        
         with open("record_stop.csv", "a", newline="") as file:
             writer = csv.writer(file, delimiter='|')
-            writer.writerow([val_op, val_ord, laser, val_prd, oggi, stop_time, nome_operatore])
+            writer.writerow([val_op, val_ord, laser, oggi, stop_time, nome_operatore])
+
+        calcola_e_salva_media(val_op)
+
+        # Svuotiamo i campi della sezione stop
+        self.numOp_in.text = ""
+        self.numOrd_in.text = ""
+        self.numPrd_in.text = ""
+        self.laser_si.active = False
+        self.laser_no.active = False
         
-        Popup(title="CONFERMA", content=Label(text="Dati salvati correttamente."), size_hint=(None, None), pos_hint={"center_x":0.5, "center_y":0.5}, size=(300,200)).open()
+        popup = Popup(title="CONFERMA", content=Label(text="Dati salvati correttamente."), size_hint=(None, None), pos_hint={"center_x":0.5, "center_y":0.5}, size=(300,200))
+        popup.bind(on_dismiss=self.home)
+        popup.open()
 
     def home(self, instance):
         self.manager.current = "main"
